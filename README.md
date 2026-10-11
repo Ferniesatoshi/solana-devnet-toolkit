@@ -22,6 +22,25 @@ All successful commands print JSON. Balance output includes integer `lamports`, 
 
 A transaction that is missing or not yet confirmed returns `found: false` and `transaction: null`; this is a successful lookup, not proof that the transaction never existed. Providers may prune old history.
 
+## Token balances
+
+```sh
+python3 toolkit.py tokens YOUR_PUBLIC_ADDRESS TOKEN_MINT_ADDRESS
+```
+
+Provide a wallet owner and token mint on the selected cluster. The command sums all
+matching token accounts, including accounts outside the associated token address.
+It reports each account, the exact total `raw_amount` as a string, `decimals`, a
+fixed-decimal `amount` string, and the observation slot. It never uses floating-point
+UI amounts. The mint filter lets the RPC select the token program.
+
+No matching accounts produces `raw_amount: "0"`, `amount: "0"`, `accounts: []`, and
+`decimals: null` (the mint precision cannot be inferred from missing accounts).
+An invalid or nonexistent mint can cause an RPC error rather than an empty result.
+Amounts describe base token units, not prices or guaranteed spendable balances;
+frozen accounts and token extensions can affect transferability or UI display.
+No wallet keys or SOL are required. This command does not create accounts or transfer tokens.
+
 ## Options
 
 Global options go **before** the command:
@@ -57,3 +76,5 @@ Commits should describe actual changes using their real creation dates. Do not f
 - [getBalance](https://solana.com/docs/rpc/http/getbalance)
 - [getHealth](https://solana.com/docs/rpc/http/gethealth)
 - [getTransaction](https://solana.com/docs/rpc/http/gettransaction)
+
+- [getTokenAccountsByOwner](https://solana.com/docs/rpc/http/gettokenaccountsbyowner)

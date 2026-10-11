@@ -93,6 +93,48 @@ def balance(client, address, commitment='confirmed'):
             'slot': result['context'].get('slot')}
 
 
+def token_balance(client, owner, mint, commitment='confirmed'):
+    """Sum all token accounts for one owner and mint, using exact integers."""
+    validate_base58(owner, 32, 'Owner')
+    validate_base58(mint, 32, 'Mint')
+    result = client.call('getTokenAccountsByOwner', [owner, {'mint': mint}, {
+        'commitment': commitment, 'encoding': 'jsonParsed'}])
+    try:
+        entries = result['value']
+        slot = result['context']['slot']
+        if not isinstance(entries, list) or type(slot) is not int or slot < 0:
+            raise ValueError
+        total, decimals, accounts = 0, None, []
+        seen = set()
+        for entry in entries:
+            address = validate_base58(entry['pubkey'], 32, 'Token account')
+            info = entry['account']['data']['parsed']['info']
+            amount = info['tokenAmount']['amount']
+            precision = info['tokenAmount']['decimals']
+            if (info['owner'] != owner or info['mint'] != mint or address in seen
+                    or not isinstance(amount, str) or not amount
+                    or len(amount) > 20 or any(c not in '0123456789' for c in amount)
+                    or int(amount) > 18446744073709551615
+                    or type(precision) is not int or not 0 <= precision <= 255
+                    or (decimals is not None and decimals != precision)):
+                raise ValueError
+            seen.add(address)
+            decimals = precision
+            total += int(amount)
+            accounts.append({'address': address, 'raw_amount': amount})
+    except (KeyError, TypeError, ValueError, ToolkitError):
+        raise ToolkitError('RPC returned an invalid token account response.') from None
+    if decimals is None:
+        display = '0'
+    elif decimals == 0:
+        display = str(total)
+    else:
+        whole, fraction = divmod(total, 10 ** decimals)
+        display = f'{whole}.{fraction:0{decimals}d}'
+    return {'owner': owner, 'mint': mint, 'raw_amount': str(total),
+            'decimals': decimals, 'amount': display, 'accounts': accounts, 'slot': slot}
+
+
 def health(client):
     start = time.monotonic()
     status = client.call('getHealth')
@@ -123,11 +165,16 @@ def main(argv=None):
     commands.add_parser('balance', help='Account balance in lamports and SOL').add_argument('address')
     commands.add_parser('health', help='RPC node health and request latency')
     commands.add_parser('transaction', help='Look up a transaction').add_argument('signature')
+    tokens = commands.add_parser('tokens', help='Token balance for a public owner and mint')
+    tokens.add_argument('owner')
+    tokens.add_argument('mint')
     args = parser.parse_args(argv)
     try:
         client = RpcClient(args.url, args.timeout)
         if args.command == 'balance':
             output = balance(client, args.address, args.commitment)
+        elif args.command == 'tokens':
+            output = token_balance(client, args.owner, args.mint, args.commitment)
         elif args.command == 'health':
             output = health(client)
         else:
