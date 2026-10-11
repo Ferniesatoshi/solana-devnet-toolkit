@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Read-only Solana Devnet utilities using only Python's standard library."""
 import argparse
+from datetime import datetime, timezone
 import json
 import math
 import os
@@ -209,16 +210,58 @@ def health(client):
     return {'status': status, 'latency_ms': round((time.monotonic() - start) * 1000, 2)}
 
 
-def transaction(client, signature, commitment='confirmed'):
+def transaction(client, signature, commitment='confirmed', summary=False):
     validate_base58(signature, 64, 'Signature')
     result = client.call('getTransaction', [signature, {
         'commitment': commitment, 'encoding': 'json', 'maxSupportedTransactionVersion': 0}])
     if result is not None and not isinstance(result, dict):
         raise ToolkitError('RPC returned an invalid transaction response.')
     output = {'signature': signature, 'found': result is not None, 'transaction': result}
+    if summary:
+        output.pop('transaction')
+        output['summary'] = summarize_transaction(result)
     if client.url == DEVNET_URL:
         output['explorer'] = f'https://explorer.solana.com/tx/{signature}?cluster=devnet'
     return output
+
+
+def summarize_transaction(result):
+    """Explain only facts reported by the RPC; missing metadata is unknown."""
+    if result is None:
+        return {'status': 'not_found', 'message': 'Not found at the requested commitment. '
+                'It may be unconfirmed or unavailable in this provider history.'}
+    try:
+        slot, block_time, meta = result['slot'], result['blockTime'], result['meta']
+        if type(slot) is not int or slot < 0:
+            raise ValueError
+        if block_time is not None and type(block_time) is not int:
+            raise ValueError
+        timestamp = (datetime.fromtimestamp(block_time, timezone.utc).isoformat()
+                     if block_time is not None else None)
+        output = {'slot': slot, 'block_time_utc': timestamp, 'fee_lamports': None,
+                  'fee_sol': None, 'error': None}
+        if meta is None:
+            output.update(status='unknown', message='Transaction found, but execution metadata '
+                          'is unavailable. Its outcome and fee are unknown.')
+            return output
+        error, fee = meta['err'], meta['fee']
+        if error is not None and not isinstance(error, (dict, str)):
+            raise ValueError
+        output.update(fee_lamports=fee, fee_sol=sol_string(fee), error=error)
+        if error is None:
+            output.update(status='success', message='Transaction executed successfully.')
+        else:
+            message = 'Transaction failed. The reported fee was still charged.'
+            if isinstance(error, dict) and 'InstructionError' in error:
+                detail = error['InstructionError']
+                if (isinstance(detail, list) and len(detail) == 2
+                        and type(detail[0]) is int and detail[0] >= 0):
+                    output['failed_instruction_index'] = detail[0]
+                    message += f' Instruction {detail[0] + 1} reported an error; see the error field.'
+            output.update(status='failed', message=message)
+        return output
+    except (KeyError, TypeError, ValueError, OverflowError, OSError, ToolkitError):
+        raise ToolkitError('RPC returned invalid transaction summary data.') from None
 
 
 def main(argv=None):
@@ -230,7 +273,9 @@ def main(argv=None):
     commands = parser.add_subparsers(dest='command', required=True)
     commands.add_parser('balance', help='Account balance in lamports and SOL').add_argument('address')
     commands.add_parser('health', help='RPC node health and request latency')
-    commands.add_parser('transaction', help='Look up a transaction').add_argument('signature')
+    tx = commands.add_parser('transaction', help='Look up a transaction')
+    tx.add_argument('signature')
+    tx.add_argument('--summary', action='store_true', help='Explain outcome, fee, and block time')
     tokens = commands.add_parser('tokens', help='Token balance for a public owner and mint')
     tokens.add_argument('owner')
     tokens.add_argument('mint')
@@ -249,7 +294,7 @@ def main(argv=None):
         elif args.command == 'health':
             output = health(client)
         else:
-            output = transaction(client, args.signature, args.commitment)
+            output = transaction(client, args.signature, args.commitment, args.summary)
         print(json.dumps(output, indent=2))
         return 0
     except ToolkitError as error:

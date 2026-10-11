@@ -80,6 +80,27 @@ Amounts describe base token units, not prices or guaranteed spendable balances;
 frozen accounts and token extensions can affect transferability or UI display.
 No wallet keys or SOL are required. This command does not create accounts or transfer tokens.
 
+## Transaction summaries
+
+```sh
+python3 toolkit.py transaction YOUR_TRANSACTION_SIGNATURE --summary
+# Or, after installing:
+solana-toolkit transaction YOUR_TRANSACTION_SIGNATURE --summary
+```
+
+The optional summary keeps JSON output, replacing the full transaction with a
+plain-language message, success/failure status, exact fee in lamports and SOL,
+slot, and nullable UTC block time. Block time is the block's estimated timestamp,
+not the time the command observed confirmation. Original RPC error details are
+preserved. Instruction failures show a one-based instruction number in the
+message and the original zero-based index in `failed_instruction_index`.
+Program-specific error codes are not guessed or decoded.
+
+Missing transactions report `not_found`; missing execution metadata reports
+`unknown` with unknown fees, rather than assuming success. An on-chain failure
+still returns exit code 0 when the lookup succeeds: inspect `summary.status`.
+The existing command without `--summary` continues to return the raw transaction.
+
 ## Options
 
 Global options go **before** the command:
