@@ -12,6 +12,10 @@ from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
 DEVNET_URL = 'https://api.devnet.solana.com'
+TOKEN_PROGRAMS = {
+    'spl-token': 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA',
+    'token-2022': 'TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb',
+}
 ALPHABET = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz'
 
 
@@ -99,6 +103,11 @@ def token_balance(client, owner, mint, commitment='confirmed'):
     validate_base58(mint, 32, 'Mint')
     result = client.call('getTokenAccountsByOwner', [owner, {'mint': mint}, {
         'commitment': commitment, 'encoding': 'jsonParsed'}])
+    return summarize_token_accounts(result, owner, mint)
+
+
+def summarize_token_accounts(result, owner, mint):
+    """Validate parsed accounts and return exact totals for one mint."""
     try:
         entries = result['value']
         slot = result['context']['slot']
@@ -135,6 +144,63 @@ def token_balance(client, owner, mint, commitment='confirmed'):
             'decimals': decimals, 'amount': display, 'accounts': accounts, 'slot': slot}
 
 
+def wallet_overview(client, owner, commitment='confirmed', limit=10):
+    """Read SOL, both token programs, and recent direct-address activity."""
+    validate_base58(owner, 32, 'Owner')
+    if type(limit) is not int or not 1 <= limit <= 100:
+        raise ToolkitError('Transaction limit must be between 1 and 100.')
+    native = balance(client, owner, commitment)
+    holdings, token_slots = [], {}
+    for program_name, program_id in TOKEN_PROGRAMS.items():
+        result = client.call('getTokenAccountsByOwner', [owner, {'programId': program_id}, {
+            'commitment': commitment, 'encoding': 'jsonParsed'}])
+        try:
+            entries = result['value']
+            slot = result['context']['slot']
+            if not isinstance(entries, list) or type(slot) is not int or slot < 0:
+                raise ValueError
+            groups, seen = {}, set()
+            for entry in entries:
+                account = entry['account']
+                parsed = account['data']['parsed']
+                mint = validate_base58(parsed['info']['mint'], 32, 'Mint')
+                address = validate_base58(entry['pubkey'], 32, 'Token account')
+                if account['owner'] != program_id or parsed['type'] != 'account' or address in seen:
+                    raise ValueError
+                seen.add(address)
+                groups.setdefault(mint, []).append(entry)
+            for mint, accounts in sorted(groups.items()):
+                summary = summarize_token_accounts({'value': accounts, 'context': {'slot': slot}}, owner, mint)
+                summary['program'] = program_name
+                holdings.append(summary)
+            token_slots[program_name] = slot
+        except (KeyError, TypeError, ValueError, ToolkitError):
+            raise ToolkitError(f'RPC returned invalid {program_name} accounts.') from None
+    recent = client.call('getSignaturesForAddress', [owner, {'commitment': commitment, 'limit': limit}])
+    transactions = []
+    try:
+        if not isinstance(recent, list) or len(recent) > limit:
+            raise ValueError
+        for item in recent:
+            signature = validate_base58(item['signature'], 64, 'Signature')
+            slot, timestamp, error = item['slot'], item['blockTime'], item['err']
+            if (type(slot) is not int or slot < 0
+                    or (timestamp is not None and type(timestamp) is not int)
+                    or (error is not None and not isinstance(error, (dict, str)))):
+                raise ValueError
+            transaction_info = {'signature': signature, 'slot': slot, 'block_time': timestamp,
+                                'status': 'success' if error is None else 'failed', 'error': error,
+                                'confirmation_status': item.get('confirmationStatus')}
+            if client.url == DEVNET_URL:
+                transaction_info['explorer'] = f'https://explorer.solana.com/tx/{signature}?cluster=devnet'
+            transactions.append(transaction_info)
+    except (KeyError, TypeError, ValueError, ToolkitError):
+        raise ToolkitError('RPC returned an invalid recent transaction response.') from None
+    return {'owner': owner, 'commitment': commitment, 'native_balance': native,
+            'token_holdings': holdings, 'token_slots': token_slots,
+            'recent_transactions': transactions, 'transaction_limit': limit}
+
+
 def health(client):
     start = time.monotonic()
     status = client.call('getHealth')
@@ -168,6 +234,9 @@ def main(argv=None):
     tokens = commands.add_parser('tokens', help='Token balance for a public owner and mint')
     tokens.add_argument('owner')
     tokens.add_argument('mint')
+    wallet = commands.add_parser('wallet', help='SOL, token holdings, and recent wallet activity')
+    wallet.add_argument('owner')
+    wallet.add_argument('--limit', type=int, default=10, help='Recent transactions (1-100; default 10)')
     args = parser.parse_args(argv)
     try:
         client = RpcClient(args.url, args.timeout)
@@ -175,6 +244,8 @@ def main(argv=None):
             output = balance(client, args.address, args.commitment)
         elif args.command == 'tokens':
             output = token_balance(client, args.owner, args.mint, args.commitment)
+        elif args.command == 'wallet':
+            output = wallet_overview(client, args.owner, args.commitment, args.limit)
         elif args.command == 'health':
             output = health(client)
         else:

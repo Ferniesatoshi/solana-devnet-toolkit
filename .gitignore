@@ -12,3 +12,8 @@ id.json
 wallet.json
 coverage.xml
 .coverage
+
+# Python packaging
+build/
+dist/
+*.egg-info/

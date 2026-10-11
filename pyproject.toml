@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "solana-devnet-toolkit"
+version = "0.1.0"
+description = "Read-only Solana Devnet balance, token, wallet, and transaction utilities"
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = []
+
+[project.scripts]
+solana-toolkit = "toolkit:main"
+
+[project.urls]
+Repository = "https://github.com/Ferniesatoshi/solana-devnet-toolkit"
+
+[tool.setuptools]
+py-modules = ["toolkit"]
